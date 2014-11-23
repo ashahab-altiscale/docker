@@ -3,8 +3,11 @@ package tarsum
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/md5"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -22,6 +25,7 @@ type testLayer struct {
 	gzip     bool
 	tarsum   string
 	version  Version
+	hash     THash
 }
 
 var testLayers = []testLayer{
@@ -75,6 +79,31 @@ var testLayers = []testLayer{
 		// this tar has newer of collider-1.tar, ensuring is has different hash
 		filename: "testdata/collision/collision-3.tar",
 		tarsum:   "tarsum+sha256:f886e431c08143164a676805205979cd8fa535dfcef714db5515650eea5a7c0f"},
+	{
+		options: &sizedOptions{1, 1024 * 1024, false, false}, // a 1mb file (in memory)
+		tarsum:  "tarsum+md5:0d7529ec7a8360155b48134b8e599f53",
+		hash:    md5THash,
+	},
+	{
+		options: &sizedOptions{1, 1024 * 1024, false, false}, // a 1mb file (in memory)
+		tarsum:  "tarsum+sha1:f1fee39c5925807ff75ef1925e7a23be444ba4df",
+		hash:    sha1Hash,
+	},
+	{
+		options: &sizedOptions{1, 1024 * 1024, false, false}, // a 1mb file (in memory)
+		tarsum:  "tarsum+sha224:6319390c0b061d639085d8748b14cd55f697cf9313805218b21cf61c",
+		hash:    sha224Hash,
+	},
+	{
+		options: &sizedOptions{1, 1024 * 1024, false, false}, // a 1mb file (in memory)
+		tarsum:  "tarsum+sha384:a578ce3ce29a2ae03b8ed7c26f47d0f75b4fc849557c62454be4b5ffd66ba021e713b48ce71e947b43aab57afd5a7636",
+		hash:    sha384Hash,
+	},
+	{
+		options: &sizedOptions{1, 1024 * 1024, false, false}, // a 1mb file (in memory)
+		tarsum:  "tarsum+sha512:e9bfb90ca5a4dfc93c46ee061a5cf9837de6d2fdf82544d6460d3147290aecfabf7b5e415b9b6e72db9b8941f149d5d69fb17a394cbfaf2eac523bd9eae21855",
+		hash:    sha512Hash,
+	},
 }
 
 type sizedOptions struct {
@@ -201,7 +230,26 @@ func TestEmptyTar(t *testing.T) {
 	if resultSum != expectedSum {
 		t.Fatalf("expected [%s] but got [%s]", expectedSum, resultSum)
 	}
+
+	// Test without ever actually writing anything.
+	if ts, err = NewTarSum(bytes.NewReader([]byte{}), true, Version0); err != nil {
+		t.Fatal(err)
+	}
+
+	resultSum = ts.Sum(nil)
+
+	if resultSum != expectedSum {
+		t.Fatalf("expected [%s] but got [%s]", expectedSum, resultSum)
+	}
 }
+
+var (
+	md5THash   = NewTHash("md5", md5.New)
+	sha1Hash   = NewTHash("sha1", sha1.New)
+	sha224Hash = NewTHash("sha224", sha256.New224)
+	sha384Hash = NewTHash("sha384", sha512.New384)
+	sha512Hash = NewTHash("sha512", sha512.New)
+)
 
 func TestTarSums(t *testing.T) {
 	for _, layer := range testLayers {
@@ -226,12 +274,33 @@ func TestTarSums(t *testing.T) {
 			defer file.Close()
 		}
 
-		//                                  double negatives!
-		ts, err := NewTarSum(fh, !layer.gzip, layer.version)
+		var ts TarSum
+		if layer.hash == nil {
+			//                           double negatives!
+			ts, err = NewTarSum(fh, !layer.gzip, layer.version)
+		} else {
+			ts, err = NewTarSumHash(fh, !layer.gzip, layer.version, layer.hash)
+		}
 		if err != nil {
 			t.Errorf("%q :: %q", err, layer.filename)
 			continue
 		}
+
+		// Read variable number of bytes to test dynamic buffer
+		dBuf := make([]byte, 1)
+		_, err = ts.Read(dBuf)
+		if err != nil {
+			t.Errorf("failed to read 1B from %s: %s", layer.filename, err)
+			continue
+		}
+		dBuf = make([]byte, 16*1024)
+		_, err = ts.Read(dBuf)
+		if err != nil {
+			t.Errorf("failed to read 16KB from %s: %s", layer.filename, err)
+			continue
+		}
+
+		// Read and discard remaining bytes
 		_, err = io.Copy(ioutil.Discard, ts)
 		if err != nil {
 			t.Errorf("failed to copy from %s: %s", layer.filename, err)
@@ -258,6 +327,153 @@ func TestTarSums(t *testing.T) {
 			t.Errorf("expecting [%s], but got [%s]", layer.tarsum, gotSum)
 		}
 	}
+}
+
+func TestIteration(t *testing.T) {
+	headerTests := []struct {
+		expectedSum string // TODO(vbatts) it would be nice to get individual sums of each
+		version     Version
+		hdr         *tar.Header
+		data        []byte
+	}{
+		{
+			"tarsum+sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			Version0,
+			&tar.Header{
+				Name:     "file.txt",
+				Size:     0,
+				Typeflag: tar.TypeReg,
+				Devminor: 0,
+				Devmajor: 0,
+			},
+			[]byte(""),
+		},
+		{
+			"tarsum.dev+sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			VersionDev,
+			&tar.Header{
+				Name:     "file.txt",
+				Size:     0,
+				Typeflag: tar.TypeReg,
+				Devminor: 0,
+				Devmajor: 0,
+			},
+			[]byte(""),
+		},
+		{
+			"tarsum.dev+sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			VersionDev,
+			&tar.Header{
+				Name:     "another.txt",
+				Uid:      1000,
+				Gid:      1000,
+				Uname:    "slartibartfast",
+				Gname:    "users",
+				Size:     4,
+				Typeflag: tar.TypeReg,
+				Devminor: 0,
+				Devmajor: 0,
+			},
+			[]byte("test"),
+		},
+		{
+			"tarsum.dev+sha256:4cc2e71ac5d31833ab2be9b4f7842a14ce595ec96a37af4ed08f87bc374228cd",
+			VersionDev,
+			&tar.Header{
+				Name:     "xattrs.txt",
+				Uid:      1000,
+				Gid:      1000,
+				Uname:    "slartibartfast",
+				Gname:    "users",
+				Size:     4,
+				Typeflag: tar.TypeReg,
+				Xattrs: map[string]string{
+					"user.key1": "value1",
+					"user.key2": "value2",
+				},
+			},
+			[]byte("test"),
+		},
+		{
+			"tarsum.dev+sha256:65f4284fa32c0d4112dd93c3637697805866415b570587e4fd266af241503760",
+			VersionDev,
+			&tar.Header{
+				Name:     "xattrs.txt",
+				Uid:      1000,
+				Gid:      1000,
+				Uname:    "slartibartfast",
+				Gname:    "users",
+				Size:     4,
+				Typeflag: tar.TypeReg,
+				Xattrs: map[string]string{
+					"user.KEY1": "value1", // adding different case to ensure different sum
+					"user.key2": "value2",
+				},
+			},
+			[]byte("test"),
+		},
+		{
+			"tarsum+sha256:c12bb6f1303a9ddbf4576c52da74973c00d14c109bcfa76b708d5da1154a07fa",
+			Version0,
+			&tar.Header{
+				Name:     "xattrs.txt",
+				Uid:      1000,
+				Gid:      1000,
+				Uname:    "slartibartfast",
+				Gname:    "users",
+				Size:     4,
+				Typeflag: tar.TypeReg,
+				Xattrs: map[string]string{
+					"user.NOT": "CALCULATED",
+				},
+			},
+			[]byte("test"),
+		},
+	}
+	for _, htest := range headerTests {
+		s, err := renderSumForHeader(htest.version, htest.hdr, htest.data)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if s != htest.expectedSum {
+			t.Errorf("expected sum: %q, got: %q", htest.expectedSum, s)
+		}
+	}
+
+}
+
+func renderSumForHeader(v Version, h *tar.Header, data []byte) (string, error) {
+	buf := bytes.NewBuffer(nil)
+	// first build our test tar
+	tw := tar.NewWriter(buf)
+	if err := tw.WriteHeader(h); err != nil {
+		return "", err
+	}
+	if _, err := tw.Write(data); err != nil {
+		return "", err
+	}
+	tw.Close()
+
+	ts, err := NewTarSum(buf, true, v)
+	if err != nil {
+		return "", err
+	}
+	tr := tar.NewReader(ts)
+	for {
+		hdr, err := tr.Next()
+		if hdr == nil || err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		if _, err = io.Copy(ioutil.Discard, tr); err != nil {
+			return "", err
+		}
+		break // we're just reading one header ...
+	}
+	return ts.Sum(nil), nil
 }
 
 func Benchmark9kTar(b *testing.B) {

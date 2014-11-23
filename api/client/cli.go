@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"reflect"
 	"strings"
 	"text/template"
+	"time"
 
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/term"
 	"github.com/docker/docker/registry"
+	"github.com/docker/libtrust"
 )
 
 type DockerCli struct {
@@ -22,10 +26,18 @@ type DockerCli struct {
 	in         io.ReadCloser
 	out        io.Writer
 	err        io.Writer
-	isTerminal bool
-	terminalFd uintptr
+	key        libtrust.PrivateKey
 	tlsConfig  *tls.Config
 	scheme     string
+	// inFd holds file descriptor of the client's STDIN, if it's a valid file
+	inFd uintptr
+	// outFd holds file descriptor of the client's STDOUT, if it's a valid file
+	outFd uintptr
+	// isTerminalIn describes if client's STDIN is a TTY
+	isTerminalIn bool
+	// isTerminalOut describes if client's STDOUT is a TTY
+	isTerminalOut bool
+	transport     *http.Transport
 }
 
 var funcMap = template.FuncMap{
@@ -63,11 +75,11 @@ func (cli *DockerCli) Cmd(args ...string) error {
 		method, exists := cli.getMethod(args[0])
 		if !exists {
 			fmt.Println("Error: Command not found:", args[0])
-			return cli.CmdHelp(args[1:]...)
+			return cli.CmdHelp()
 		}
 		return method(args[1:]...)
 	}
-	return cli.CmdHelp(args...)
+	return cli.CmdHelp()
 }
 
 func (cli *DockerCli) Subcmd(name, signature, description string) *flag.FlagSet {
@@ -92,11 +104,13 @@ func (cli *DockerCli) LoadConfigFile() (err error) {
 	return err
 }
 
-func NewDockerCli(in io.ReadCloser, out, err io.Writer, proto, addr string, tlsConfig *tls.Config) *DockerCli {
+func NewDockerCli(in io.ReadCloser, out, err io.Writer, key libtrust.PrivateKey, proto, addr string, tlsConfig *tls.Config) *DockerCli {
 	var (
-		isTerminal = false
-		terminalFd uintptr
-		scheme     = "http"
+		inFd          uintptr
+		outFd         uintptr
+		isTerminalIn  = false
+		isTerminalOut = false
+		scheme        = "http"
 	)
 
 	if tlsConfig != nil {
@@ -104,24 +118,53 @@ func NewDockerCli(in io.ReadCloser, out, err io.Writer, proto, addr string, tlsC
 	}
 
 	if in != nil {
+		if file, ok := in.(*os.File); ok {
+			inFd = file.Fd()
+			isTerminalIn = term.IsTerminal(inFd)
+		}
+	}
+
+	if out != nil {
 		if file, ok := out.(*os.File); ok {
-			terminalFd = file.Fd()
-			isTerminal = term.IsTerminal(terminalFd)
+			outFd = file.Fd()
+			isTerminalOut = term.IsTerminal(outFd)
 		}
 	}
 
 	if err == nil {
 		err = out
 	}
+
+	// The transport is created here for reuse during the client session
+	tr := &http.Transport{
+		TLSClientConfig: tlsConfig,
+	}
+
+	// Why 32? See issue 8035
+	timeout := 32 * time.Second
+	if proto == "unix" {
+		// no need in compressing for local communications
+		tr.DisableCompression = true
+		tr.Dial = func(_, _ string) (net.Conn, error) {
+			return net.DialTimeout(proto, addr, timeout)
+		}
+	} else {
+		tr.Dial = (&net.Dialer{Timeout: timeout}).Dial
+	}
+
 	return &DockerCli{
-		proto:      proto,
-		addr:       addr,
-		in:         in,
-		out:        out,
-		err:        err,
-		isTerminal: isTerminal,
-		terminalFd: terminalFd,
-		tlsConfig:  tlsConfig,
-		scheme:     scheme,
+		proto:         proto,
+		addr:          addr,
+		in:            in,
+		out:           out,
+		err:           err,
+		key:           key,
+		inFd:          inFd,
+		outFd:         outFd,
+		isTerminalIn:  isTerminalIn,
+		isTerminalOut: isTerminalOut,
+		tlsConfig:     tlsConfig,
+		scheme:        scheme,
+		transport:     tr,
 	}
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -13,7 +12,9 @@ func TestRmiWithContainerFails(t *testing.T) {
 	// create a container
 	runCmd := exec.Command(dockerBinary, "run", "-d", "busybox", "true")
 	out, _, err := runCommandWithOutput(runCmd)
-	errorOut(err, t, fmt.Sprintf("failed to create a container: %v %v", out, err))
+	if err != nil {
+		t.Fatalf("failed to create a container: %s, %v", out, err)
+	}
 
 	cleanedContainerID := stripTrailingCharacters(out)
 
@@ -73,5 +74,48 @@ func TestRmiTag(t *testing.T) {
 		}
 
 	}
-	logDone("tag,rmi- tagging the same images multiple times then removing tags")
+	logDone("rmi - tag,rmi- tagging the same images multiple times then removing tags")
+}
+
+func TestRmiTagWithExistingContainers(t *testing.T) {
+	container := "test-delete-tag"
+	newtag := "busybox:newtag"
+	bb := "busybox:latest"
+	if out, _, err := runCommandWithOutput(exec.Command(dockerBinary, "tag", bb, newtag)); err != nil {
+		t.Fatalf("Could not tag busybox: %v: %s", err, out)
+	}
+	if out, _, err := runCommandWithOutput(exec.Command(dockerBinary, "run", "--name", container, bb, "/bin/true")); err != nil {
+		t.Fatalf("Could not run busybox: %v: %s", err, out)
+	}
+	out, _, err := runCommandWithOutput(exec.Command(dockerBinary, "rmi", newtag))
+	if err != nil {
+		t.Fatalf("Could not remove tag %s: %v: %s", newtag, err, out)
+	}
+	if d := strings.Count(out, "Untagged: "); d != 1 {
+		t.Fatalf("Expected 1 untagged entry got %d: %q", d, out)
+	}
+
+	deleteAllContainers()
+
+	logDone("rmi - delete tag with existing containers")
+}
+
+func TestRmiForceWithExistingContainers(t *testing.T) {
+	image := "busybox-clone"
+	if out, _, err := runCommandWithOutput(exec.Command(dockerBinary, "build", "--no-cache", "-t", image, "/docker-busybox")); err != nil {
+		t.Fatalf("Could not build %s: %s, %v", image, out, err)
+	}
+
+	if out, _, err := runCommandWithOutput(exec.Command(dockerBinary, "run", "--name", "test-force-rmi", image, "/bin/true")); err != nil {
+		t.Fatalf("Could not run container: %s, %v", out, err)
+	}
+
+	out, _, err := runCommandWithOutput(exec.Command(dockerBinary, "rmi", "-f", image))
+	if err != nil {
+		t.Fatalf("Could not remove image %s:  %s, %v", image, out, err)
+	}
+
+	deleteAllContainers()
+
+	logDone("rmi - force delete with existing containers")
 }
