@@ -34,7 +34,9 @@ lxc.network.mtu = {{.Network.Mtu}}
 # root filesystem
 {{$ROOTFS := .Rootfs}}
 lxc.rootfs = {{$ROOTFS}}
-
+{{if .ReadonlyRootfs}}
+lxc.rootfs.options = ro
+{{end}}
 # use a dedicated pts for the container (and limit the number of pseudo terminal
 # available)
 lxc.pts = 1024
