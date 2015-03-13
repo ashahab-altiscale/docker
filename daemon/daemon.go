@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -12,16 +13,17 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/docker/libcontainer"
+	"github.com/docker/libcontainer/cgroups/systemd"
 	"github.com/docker/libcontainer/label"
+	"github.com/docker/libcontainer/system"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/api"
 	"github.com/docker/docker/autogen/dockerversion"
-	"github.com/docker/docker/daemon/execdriver"
-	"github.com/docker/docker/daemon/execdriver/execdrivers"
-	"github.com/docker/docker/daemon/execdriver/lxc"
 	"github.com/docker/docker/daemon/graphdriver"
 	_ "github.com/docker/docker/daemon/graphdriver/vfs"
 	_ "github.com/docker/docker/daemon/networkdriver/bridge"
@@ -38,6 +40,7 @@ import (
 	"github.com/docker/docker/pkg/networkfs/resolvconf"
 	"github.com/docker/docker/pkg/parsers"
 	"github.com/docker/docker/pkg/parsers/kernel"
+	"github.com/docker/docker/pkg/reexec"
 	"github.com/docker/docker/pkg/sysinfo"
 	"github.com/docker/docker/pkg/truncindex"
 	"github.com/docker/docker/runconfig"
@@ -93,6 +96,7 @@ type Daemon struct {
 	repository       string
 	sysInitPath      string
 	containers       *contStore
+	factory          libcontainer.Factory
 	execCommands     *execStore
 	graph            *graph.Graph
 	repositories     *graph.TagStore
@@ -103,7 +107,6 @@ type Daemon struct {
 	config           *Config
 	containerGraph   *graphdb.Database
 	driver           graphdriver.Driver
-	execDriver       execdriver.Driver
 	trustStore       *trust.TrustStore
 	statsCollector   *statsCollector
 	defaultLogConfig runconfig.LogConfig
@@ -262,43 +265,12 @@ func (daemon *Daemon) register(container *Container, updateSuffixarray bool) err
 	if container.IsRunning() {
 		log.Debugf("killing old running container %s", container.ID)
 
-		existingPid := container.Pid
-		container.SetStopped(&execdriver.ExitStatus{ExitCode: 0})
-
-		// We only have to handle this for lxc because the other drivers will ensure that
-		// no processes are left when docker dies
-		if container.ExecDriver == "" || strings.Contains(container.ExecDriver, "lxc") {
-			lxc.KillLxc(container.ID, 9)
-		} else {
-			// use the current driver and ensure that the container is dead x.x
-			cmd := &execdriver.Command{
-				ID: container.ID,
-			}
-			var err error
-			cmd.ProcessConfig.Process, err = os.FindProcess(existingPid)
-			if err != nil {
-				log.Debugf("cannot find existing process for %d", existingPid)
-			}
-			daemon.execDriver.Terminate(cmd)
-		}
-
+		container.SetStopped(&ExitStatus{ExitCode: 0})
 		if err := container.Unmount(); err != nil {
 			log.Debugf("unmount error %s", err)
 		}
 		if err := container.ToDisk(); err != nil {
 			log.Debugf("saving stopped state to disk %s", err)
-		}
-
-		info := daemon.execDriver.Info(container.ID)
-		if !info.IsRunning() {
-			log.Debugf("Container %s was supposed to be running but is not.", container.ID)
-
-			log.Debugf("Marking as stopped")
-
-			container.SetStopped(&execdriver.ExitStatus{ExitCode: -127})
-			if err := container.ToDisk(); err != nil {
-				return err
-			}
 		}
 	}
 	return nil
@@ -665,7 +637,6 @@ func (daemon *Daemon) newContainer(name string, config *runconfig.Config, imgID 
 		NetworkSettings: &NetworkSettings{},
 		Name:            name,
 		Driver:          daemon.driver.String(),
-		ExecDriver:      daemon.execDriver.Name(),
 		State:           NewState(),
 		execCommands:    newExecStore(),
 	}
@@ -800,6 +771,113 @@ func (daemon *Daemon) RegisterLinks(container *Container, hostConfig *runconfig.
 		}
 	}
 	return nil
+}
+
+func (d *Daemon) FactoryType() string {
+	return d.factory.Type()
+}
+
+const stateFile = "state.json"
+
+// cleanOldCTs finding state files from old execdriver, kill all processes which
+// listed in them and nuke execdriver/native. This code should be removed at
+// some point because it needed only for upgrade from pre-1.6 to 1.6
+func cleanOldCTs(root string) {
+	// remove leftovers from old versions of docker, previous to libcontainer v2.0
+	oldRoot := filepath.Join(root, "execdriver")
+	_, err := os.Stat(oldRoot)
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {
+		log.Warnf("Error on cleaning directory %s from old daemon: %v", oldRoot, err)
+	}
+	if err := filepath.Walk(oldRoot, func(path string, info os.FileInfo, err error) error {
+		defer func() {
+			if err != nil {
+				log.Warnf("Error on cleaning directory %s from old daemon: %v", oldRoot, err)
+			}
+		}()
+		if err != nil {
+			return nil
+		}
+		if info.Name() != stateFile {
+			return nil
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return nil
+		}
+		st := struct {
+			InitPid       int    `json:"init_pid"`
+			InitStartTime string `json:"init_start_time"`
+		}{}
+		if err := json.NewDecoder(f).Decode(&st); err != nil {
+			return nil
+		}
+		if st.InitPid == 0 {
+			return nil
+		}
+		startTime, err := system.GetProcessStartTime(st.InitPid)
+		if err != nil {
+			return nil
+		}
+		if st.InitStartTime == startTime {
+			if err := syscall.Kill(st.InitPid, syscall.SIGKILL); err != nil {
+				return nil
+			}
+		}
+		return nil
+	}); err != nil {
+		log.Warnf("Failed to remove leftovers from %s: %v", oldRoot, err)
+	}
+	if err := os.RemoveAll(oldRoot); err != nil {
+		log.Errorf("Failed to remove directory %s: %v", oldRoot, err)
+	}
+}
+
+func cleanCTs(root string) {
+	cleanOldCTs(root)
+	root = filepath.Join(root, "runtime")
+	if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		defer func() {
+			if err != nil {
+				log.Warnf("Error on cleaning runtime directory %s: %v", root, err)
+			}
+		}()
+		if err != nil {
+			return nil
+		}
+		if info.Name() != stateFile {
+			return nil
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return nil
+		}
+		var st *libcontainer.State
+		if err := json.NewDecoder(f).Decode(&st); err != nil {
+			return nil
+		}
+		if st.InitProcessPid == 0 {
+			return nil
+		}
+		startTime, err := system.GetProcessStartTime(st.InitProcessPid)
+		if err != nil {
+			return nil
+		}
+		if st.InitProcessStartTime == startTime {
+			if err := syscall.Kill(st.InitProcessPid, syscall.SIGKILL); err != nil {
+				return nil
+			}
+		}
+		return nil
+	}); err != nil {
+		log.Warnf("Failed to remove leftovers from %s: %v", root, err)
+	}
+	if err := os.RemoveAll(root); err != nil {
+		log.Errorf("Failed to remove directory %s: %v", root, err)
+	}
 }
 
 // FIXME: harmonize with NewGraph()
@@ -1011,17 +1089,38 @@ func NewDaemonFromDirectory(config *Config, eng *engine.Engine) (*Daemon, error)
 		sysInitPath = localCopy
 	}
 
+	// cleaning remainings of container states and old processes
+	cleanCTs(config.Root)
+
 	sysInfo := sysinfo.New(false)
+	// XXX: add lxc
 	const runDir = "/var/run/docker"
-	ed, err := execdrivers.NewDriver(config.ExecDriver, runDir, config.Root, sysInitPath, sysInfo)
-	if err != nil {
-		return nil, err
+	var f libcontainer.Factory
+	switch config.ExecDriver {
+	case "native":
+		cgm := libcontainer.Cgroupfs
+		if systemd.UseSystemd() {
+			cgm = libcontainer.SystemdCgroups
+		}
+
+		factory, err := libcontainer.New(
+			filepath.Join(runDir, "runtime", "libcontainer"),
+			cgm,
+			libcontainer.InitPath(reexec.Self(), initCommand),
+		)
+		if err != nil {
+			return nil, err
+		}
+		f = factory
+	default:
+		return nil, fmt.Errorf("Unknown execdriver: %s", config.ExecDriver)
 	}
 
 	daemon := &Daemon{
 		ID:               trustKey.PublicKey().KeyID(),
 		repository:       daemonRepo,
 		containers:       &contStore{s: make(map[string]*Container)},
+		factory:          f,
 		execCommands:     newExecStore(),
 		graph:            g,
 		repositories:     repositories,
@@ -1032,7 +1131,6 @@ func NewDaemonFromDirectory(config *Config, eng *engine.Engine) (*Daemon, error)
 		containerGraph:   graph,
 		driver:           driver,
 		sysInitPath:      sysInitPath,
-		execDriver:       ed,
 		eng:              eng,
 		trustStore:       t,
 		statsCollector:   newStatsCollector(1 * time.Second),
@@ -1068,7 +1166,7 @@ func (daemon *Daemon) shutdown() error {
 
 			go func() {
 				defer group.Done()
-				if err := c.KillSig(15); err != nil {
+				if err := c.KillSig(os.Interrupt); err != nil {
 					log.Debugf("kill 15 error for %s - %s", c.ID, err)
 				}
 				c.WaitStop(-1 * time.Second)
@@ -1109,34 +1207,6 @@ func (daemon *Daemon) Changes(container *Container) ([]archive.Change, error) {
 func (daemon *Daemon) Diff(container *Container) (archive.Archive, error) {
 	initID := fmt.Sprintf("%s-init", container.ID)
 	return daemon.driver.Diff(container.ID, initID)
-}
-
-func (daemon *Daemon) Run(c *Container, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (execdriver.ExitStatus, error) {
-	return daemon.execDriver.Run(c.command, pipes, startCallback)
-}
-
-func (daemon *Daemon) Pause(c *Container) error {
-	if err := daemon.execDriver.Pause(c.command); err != nil {
-		return err
-	}
-	c.SetPaused()
-	return nil
-}
-
-func (daemon *Daemon) Unpause(c *Container) error {
-	if err := daemon.execDriver.Unpause(c.command); err != nil {
-		return err
-	}
-	c.SetUnpaused()
-	return nil
-}
-
-func (daemon *Daemon) Kill(c *Container, sig int) error {
-	return daemon.execDriver.Kill(c.command, sig)
-}
-
-func (daemon *Daemon) Stats(c *Container) (*execdriver.ResourceStats, error) {
-	return daemon.execDriver.Stats(c.ID)
 }
 
 func (daemon *Daemon) SubscribeToContainerStats(name string) (chan interface{}, error) {
@@ -1203,10 +1273,6 @@ func (daemon *Daemon) SystemInitPath() string {
 
 func (daemon *Daemon) GraphDriver() graphdriver.Driver {
 	return daemon.driver
-}
-
-func (daemon *Daemon) ExecutionDriver() execdriver.Driver {
-	return daemon.execDriver
 }
 
 func (daemon *Daemon) ContainerGraph() *graphdb.Database {

@@ -24,7 +24,8 @@ func (daemon *Daemon) ContainerInspect(job *engine.Job) engine.Status {
 		b, err := json.Marshal(&struct {
 			*Container
 			HostConfig *runconfig.HostConfig
-		}{container, container.hostConfig})
+			ExecDriver string
+		}{container, container.hostConfig, daemon.FactoryType()})
 		if err != nil {
 			return job.Error(err)
 		}
@@ -48,7 +49,7 @@ func (daemon *Daemon) ContainerInspect(job *engine.Job) engine.Status {
 	out.SetJson("Name", container.Name)
 	out.SetInt("RestartCount", container.RestartCount)
 	out.Set("Driver", container.Driver)
-	out.Set("ExecDriver", container.ExecDriver)
+	out.Set("ExecDriver", daemon.FactoryType())
 	out.Set("MountLabel", container.MountLabel)
 	out.Set("ProcessLabel", container.ProcessLabel)
 	out.SetJson("Volumes", container.Volumes)

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	log "github.com/Sirupsen/logrus"
-	"github.com/docker/docker/daemon/execdriver"
 	"github.com/docker/docker/pkg/pubsub"
 	"github.com/docker/libcontainer/system"
 )
@@ -85,7 +84,7 @@ func (s *statsCollector) run() {
 			}
 			stats, err := container.Stats()
 			if err != nil {
-				if err != execdriver.ErrNotRunning {
+				if !strings.HasSuffix(err.Error(), "is not running") {
 					log.Errorf("collecting stats for %s: %v", container.ID, err)
 				}
 				continue

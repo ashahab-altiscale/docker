@@ -23,8 +23,8 @@ func (daemon *Daemon) ContainerCreate(job *engine.Job) engine.Status {
 	config := runconfig.ContainerConfigFromJob(job)
 	hostConfig := runconfig.ContainerHostConfigFromJob(job)
 
-	if len(hostConfig.LxcConf) > 0 && !strings.Contains(daemon.ExecutionDriver().Name(), "lxc") {
-		return job.Errorf("Cannot use --lxc-conf with execdriver: %s", daemon.ExecutionDriver().Name())
+	if len(hostConfig.LxcConf) > 0 && !strings.Contains(daemon.FactoryType(), "lxc") {
+		return job.Errorf("Cannot use --lxc-conf with execdriver: %s", daemon.FactoryType())
 	}
 	if hostConfig.Memory != 0 && hostConfig.Memory < 4194304 {
 		return job.Errorf("Minimum memory limit allowed is 4MB")

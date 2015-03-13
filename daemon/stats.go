@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 
 	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/daemon/execdriver"
 	"github.com/docker/docker/engine"
 	"github.com/docker/libcontainer"
 	"github.com/docker/libcontainer/cgroups"
@@ -17,7 +16,10 @@ func (daemon *Daemon) ContainerStats(job *engine.Job) engine.Status {
 	}
 	enc := json.NewEncoder(job.Stdout)
 	for v := range updates {
-		update := v.(*execdriver.ResourceStats)
+		update, ok := v.(*resourceStats)
+		if !ok {
+			return job.Errorf("Unexpected type of stats: %T", update)
+		}
 		ss := convertToAPITypes(update.Stats)
 		ss.MemoryStats.Limit = uint64(update.MemoryLimit)
 		ss.Read = update.Read

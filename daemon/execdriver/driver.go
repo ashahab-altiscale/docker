@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/daemon/execdriver/native/template"
 	"github.com/docker/docker/pkg/ulimit"
 	"github.com/docker/libcontainer"
 	"github.com/docker/libcontainer/cgroups/fs"
@@ -168,7 +167,7 @@ type Command struct {
 }
 
 func InitContainer(c *Command) *configs.Config {
-	container := template.New()
+	container := &configs.Config{}
 
 	container.Hostname = getEnv("HOSTNAME", c.ProcessConfig.Env)
 	container.Cgroups.Name = c.ID

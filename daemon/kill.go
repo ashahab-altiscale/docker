@@ -51,7 +51,7 @@ func (daemon *Daemon) ContainerKill(job *engine.Job) engine.Status {
 		container.LogEvent("kill")
 	} else {
 		// Otherwise, just send the requested signal
-		if err := container.KillSig(int(sig)); err != nil {
+		if err := container.KillSig(syscall.Signal(sig)); err != nil {
 			return job.Errorf("Cannot kill container %s: %s", name, err)
 		}
 		// FIXME: Add event for signals

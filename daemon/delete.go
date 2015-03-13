@@ -117,10 +117,6 @@ func (daemon *Daemon) Rm(container *Container) error {
 		return fmt.Errorf("Unable to remove filesystem for %v: %v", container.ID, err)
 	}
 
-	if err := daemon.execDriver.Clean(container.ID); err != nil {
-		return fmt.Errorf("Unable to remove execdriver data for %s: %s", container.ID, err)
-	}
-
 	selinuxFreeLxcContexts(container.ProcessLabel)
 
 	return nil

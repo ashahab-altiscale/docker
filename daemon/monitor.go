@@ -2,17 +2,19 @@ package daemon
 
 import (
 	"io"
-	"os/exec"
+	"os"
 	"sync"
 	"time"
 
 	log "github.com/Sirupsen/logrus"
-	"github.com/docker/docker/daemon/execdriver"
 	"github.com/docker/docker/pkg/common"
 	"github.com/docker/docker/runconfig"
+	"github.com/docker/libcontainer"
 )
 
 const defaultTimeIncrement = 100
+
+var failStatus = &ExitStatus{ExitCode: -1}
 
 // containerMonitor monitors the execution of a container's main process.
 // If a restart policy is specified for the container the monitor will ensure that the
@@ -93,92 +95,111 @@ func (m *containerMonitor) Close() error {
 
 		return err
 	}
-
 	return nil
 }
 
 // Start starts the containers process and monitors it according to the restart policy
 func (m *containerMonitor) Start() error {
-	var (
-		err        error
-		exitStatus execdriver.ExitStatus
-		// this variable indicates where we in execution flow:
-		// before Run or after
-		afterRun bool
-	)
-
-	// ensure that when the monitor finally exits we release the networking and unmount the rootfs
-	defer func() {
-		if afterRun {
-			m.container.Lock()
-			m.container.setStopped(&exitStatus)
-			defer m.container.Unlock()
-		}
-		m.Close()
-	}()
-
 	// reset the restart count
 	m.container.RestartCount = -1
 
 	for {
-		m.container.RestartCount++
-
-		if err := m.container.startLogging(); err != nil {
-			m.resetContainer(false)
-
-			return err
-		}
-
-		pipes := execdriver.NewPipes(m.container.stdin, m.container.stdout, m.container.stderr, m.container.Config.OpenStdin)
-
-		m.container.LogEvent("start")
-
-		m.lastStartTime = time.Now()
-
-		if exitStatus, err = m.container.daemon.Run(m.container, pipes, m.callback); err != nil {
-			// if we receive an internal error from the initial start of a container then lets
-			// return it instead of entering the restart loop
-			if m.container.RestartCount == 0 {
+		err := m.step()
+		if err != nil {
+			m.setRestart(failStatus, err)
+			if m.clientAttached() {
+				// only on initial start
 				m.container.ExitCode = -1
-				m.resetContainer(false)
-
+				m.resetContainer()
 				return err
 			}
-
 			log.Errorf("Error running container: %s", err)
 		}
-
-		// here container.Lock is already lost
-		afterRun = true
-
-		m.resetMonitor(err == nil && exitStatus.ExitCode == 0)
-
-		if m.shouldRestart(exitStatus.ExitCode) {
-			m.container.SetRestarting(&exitStatus)
-			if exitStatus.OOMKilled {
-				m.container.LogEvent("oom")
-			}
+		if !m.wait() {
 			m.container.LogEvent("die")
-			m.resetContainer(true)
-
-			// sleep with a small time increment between each restart to help avoid issues cased by quickly
-			// restarting the container because of some types of errors ( networking cut out, etc... )
-			m.waitForNextRestart()
-
-			// we need to check this before reentering the loop because the waitForNextRestart could have
-			// been terminated by a request from a user
-			if m.shouldStop {
-				return err
-			}
-			continue
-		}
-		if exitStatus.OOMKilled {
-			m.container.LogEvent("oom")
+			return nil
 		}
 		m.container.LogEvent("die")
-		m.resetContainer(true)
+	}
+}
+
+func (m *containerMonitor) clientAttached() bool {
+	select {
+	case <-m.startSignal:
+		return false
+	default:
+		return true
+	}
+}
+
+func (m *containerMonitor) step() error {
+	if !m.clientAttached() {
+		// outer mutex already unlocked
+		m.container.Lock()
+		defer m.container.Unlock()
+	}
+	m.container.RestartCount++
+
+	if err := m.container.startLogging(); err != nil {
 		return err
 	}
+
+	m.container.LogEvent("start")
+
+	m.lastStartTime = time.Now()
+
+	err := m.container.ctRun()
+	if err != nil {
+		return err
+	}
+
+	if err := m.notifyStart(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *containerMonitor) wait() bool {
+	es, err := m.container.ctWait()
+	if err != nil {
+		log.Errorf("Process exited with error: %s", err)
+	}
+	m.container.Lock()
+	defer m.container.Unlock()
+	return m.setRestart(es, err)
+}
+
+// every time when we return false from here - we exiting restarting loop
+func (m *containerMonitor) setRestart(es *ExitStatus, err error) bool {
+	m.resetMonitor(err == nil && es.ExitCode == 0)
+	if m.shouldRestart(es.ExitCode) {
+		m.container.setRestarting(es)
+		if es.OOMKilled {
+			m.container.LogEvent("oom")
+		}
+		m.resetContainer()
+
+		// sleep with a small time increment between each restart to help avoid issues cased by quickly
+		// restarting the container because of some types of errors ( networking cut out, etc... )
+		m.waitForNextRestart()
+
+		// we need to check this before reentering the loop because the waitForNextRestart could have
+		// been terminated by a request from a user
+		if m.shouldStop {
+			m.Close()
+			m.container.setStopped(es)
+			return false
+		}
+		return true
+	}
+
+	if es.OOMKilled {
+		m.container.LogEvent("oom")
+	}
+	m.resetContainer()
+	m.Close()
+	m.container.setStopped(es)
+	return false
 }
 
 // resetMonitor resets the stateful fields on the containerMonitor based on the
@@ -242,17 +263,30 @@ func (m *containerMonitor) shouldRestart(exitCode int) bool {
 
 // callback ensures that the container's state is properly updated after we
 // received ack from the execution drivers
-func (m *containerMonitor) callback(processConfig *execdriver.ProcessConfig, pid int) {
-	if processConfig.Tty {
+func (m *containerMonitor) notifyStart() error {
+	if m.container.Config.Tty {
 		// The callback is called after the process Start()
 		// so we are in the parent process. In TTY mode, stdin/out/err is the PtySlave
 		// which we close here.
-		if c, ok := processConfig.Stdout.(io.Closer); ok {
+		if c, ok := m.container.ctInitProcess.Stdout.(io.Closer); ok {
 			c.Close()
 		}
+
+	}
+
+	p := m.container.ctInitProcess
+	pid, err := p.Pid()
+	if err != nil {
+		p.Signal(os.Kill)
+		p.Wait()
+		return err
 	}
 
 	m.container.setRunning(pid)
+
+	if err := m.container.toDisk(); err != nil {
+		return err
+	}
 
 	// signal that the process has started
 	// close channel only if not closed
@@ -261,21 +295,13 @@ func (m *containerMonitor) callback(processConfig *execdriver.ProcessConfig, pid
 	default:
 		close(m.startSignal)
 	}
-
-	if err := m.container.ToDisk(); err != nil {
-		log.Debugf("%s", err)
-	}
+	return nil
 }
 
 // resetContainer resets the container's IO and ensures that the command is able to be executed again
 // by copying the data into a new struct
-// if lock is true, then container locked during reset
-func (m *containerMonitor) resetContainer(lock bool) {
+func (m *containerMonitor) resetContainer() {
 	container := m.container
-	if lock {
-		container.Lock()
-		defer container.Unlock()
-	}
 
 	if container.Config.OpenStdin {
 		if err := container.stdin.Close(); err != nil {
@@ -291,8 +317,8 @@ func (m *containerMonitor) resetContainer(lock bool) {
 		log.Errorf("%s: Error close stderr: %s", container.ID, err)
 	}
 
-	if container.command != nil && container.command.ProcessConfig.Terminal != nil {
-		if err := container.command.ProcessConfig.Terminal.Close(); err != nil {
+	if container.terminal != nil {
+		if err := container.terminal.Close(); err != nil {
 			log.Errorf("%s: Error closing terminal: %s", container.ID, err)
 		}
 	}
@@ -320,17 +346,12 @@ func (m *containerMonitor) resetContainer(lock bool) {
 		container.logDriver = nil
 	}
 
-	c := container.command.ProcessConfig.Cmd
+	p := container.ctInitProcess
 
-	container.command.ProcessConfig.Cmd = exec.Cmd{
-		Stdin:       c.Stdin,
-		Stdout:      c.Stdout,
-		Stderr:      c.Stderr,
-		Path:        c.Path,
-		Env:         c.Env,
-		ExtraFiles:  c.ExtraFiles,
-		Args:        c.Args,
-		Dir:         c.Dir,
-		SysProcAttr: c.SysProcAttr,
+	container.ctInitProcess = &libcontainer.Process{
+		Args: p.Args,
+		Env:  p.Env,
+		User: p.User,
+		Cwd:  p.Cwd,
 	}
 }

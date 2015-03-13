@@ -1,4 +1,4 @@
-package template
+package daemon
 
 import (
 	"syscall"
@@ -9,8 +9,7 @@ import (
 
 const defaultMountFlags = syscall.MS_NOEXEC | syscall.MS_NOSUID | syscall.MS_NODEV
 
-// New returns the docker default configuration for libcontainer
-func New() *configs.Config {
+func NewLibcontainerConfig() *configs.Config {
 	container := &configs.Config{
 		Capabilities: []string{
 			"CHOWN",

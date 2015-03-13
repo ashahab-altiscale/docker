@@ -78,7 +78,7 @@ func (daemon *Daemon) CmdInfo(job *engine.Job) engine.Status {
 	v.SetInt("NFd", utils.GetTotalUsedFds())
 	v.SetInt("NGoroutines", runtime.NumGoroutine())
 	v.Set("SystemTime", time.Now().Format(time.RFC3339Nano))
-	v.Set("ExecutionDriver", daemon.ExecutionDriver().Name())
+	v.Set("ExecutionDriver", daemon.FactoryType())
 	v.SetInt("NEventsListener", env.GetInt("count"))
 	v.Set("KernelVersion", kernelVersion)
 	v.Set("OperatingSystem", operatingSystem)

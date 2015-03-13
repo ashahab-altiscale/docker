@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	log "github.com/Sirupsen/logrus"
-	"github.com/docker/docker/daemon/execdriver"
 	"github.com/docker/docker/pkg/chrootarchive"
 	"github.com/docker/docker/pkg/symlink"
 	"github.com/docker/docker/pkg/system"
@@ -315,38 +314,6 @@ func validMountMode(mode string) bool {
 	}
 
 	return validModes[mode]
-}
-
-func (container *Container) setupMounts() error {
-	mounts := []execdriver.Mount{}
-
-	// Mount user specified volumes
-	// Note, these are not private because you may want propagation of (un)mounts from host
-	// volumes. For instance if you use -v /usr:/usr and the host later mounts /usr/share you
-	// want this new mount in the container
-	// These mounts must be ordered based on the length of the path that it is being mounted to (lexicographic)
-	for _, path := range container.sortedVolumeMounts() {
-		mounts = append(mounts, execdriver.Mount{
-			Source:      container.Volumes[path],
-			Destination: path,
-			Writable:    container.VolumesRW[path],
-		})
-	}
-
-	if container.ResolvConfPath != "" {
-		mounts = append(mounts, execdriver.Mount{Source: container.ResolvConfPath, Destination: "/etc/resolv.conf", Writable: true, Private: true})
-	}
-
-	if container.HostnamePath != "" {
-		mounts = append(mounts, execdriver.Mount{Source: container.HostnamePath, Destination: "/etc/hostname", Writable: true, Private: true})
-	}
-
-	if container.HostsPath != "" {
-		mounts = append(mounts, execdriver.Mount{Source: container.HostsPath, Destination: "/etc/hosts", Writable: true, Private: true})
-	}
-
-	container.command.Mounts = mounts
-	return nil
 }
 
 func (container *Container) VolumeMounts() map[string]*Mount {

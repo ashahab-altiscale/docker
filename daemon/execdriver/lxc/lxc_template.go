@@ -8,7 +8,6 @@ import (
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/daemon/execdriver"
-	nativeTemplate "github.com/docker/docker/daemon/execdriver/native/template"
 	"github.com/docker/docker/utils"
 	"github.com/docker/libcontainer/label"
 )
@@ -158,10 +157,26 @@ func escapeFstabSpaces(field string) string {
 	return strings.Replace(field, " ", "\\040", -1)
 }
 
+var basicCaps = []string{
+	"CHOWN",
+	"DAC_OVERRIDE",
+	"FSETID",
+	"FOWNER",
+	"MKNOD",
+	"NET_RAW",
+	"SETGID",
+	"SETUID",
+	"SETFCAP",
+	"SETPCAP",
+	"NET_BIND_SERVICE",
+	"SYS_CHROOT",
+	"KILL",
+	"AUDIT_WRITE",
+}
+
 func keepCapabilities(adds []string, drops []string) ([]string, error) {
-	container := nativeTemplate.New()
 	log.Debugf("adds %s drops %s\n", adds, drops)
-	caps, err := execdriver.TweakCapabilities(container.Capabilities, adds, drops)
+	caps, err := execdriver.TweakCapabilities(basicCaps, adds, drops)
 	if err != nil {
 		return nil, err
 	}

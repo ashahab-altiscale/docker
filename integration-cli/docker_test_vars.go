@@ -22,7 +22,7 @@ var (
 	containerStoragePath = dockerBasePath + "/containers"
 
 	runtimePath    = "/var/run/docker"
-	execDriverPath = runtimePath + "/execdriver/native"
+	execDriverPath = runtimePath + "/runtime/libcontainer"
 
 	workingDirectory string
 )

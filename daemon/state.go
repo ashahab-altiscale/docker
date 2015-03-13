@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/daemon/execdriver"
 	"github.com/docker/docker/pkg/units"
 )
 
@@ -151,13 +150,13 @@ func (s *State) setRunning(pid int) {
 	s.waitChan = make(chan struct{})
 }
 
-func (s *State) SetStopped(exitStatus *execdriver.ExitStatus) {
+func (s *State) SetStopped(exitStatus *ExitStatus) {
 	s.Lock()
 	s.setStopped(exitStatus)
 	s.Unlock()
 }
 
-func (s *State) setStopped(exitStatus *execdriver.ExitStatus) {
+func (s *State) setStopped(exitStatus *ExitStatus) {
 	s.Running = false
 	s.Restarting = false
 	s.Pid = 0
@@ -170,8 +169,13 @@ func (s *State) setStopped(exitStatus *execdriver.ExitStatus) {
 
 // SetRestarting is when docker hanldes the auto restart of containers when they are
 // in the middle of a stop and being restarted again
-func (s *State) SetRestarting(exitStatus *execdriver.ExitStatus) {
+func (s *State) SetRestarting(exitStatus *ExitStatus) {
 	s.Lock()
+	s.setRestarting(exitStatus)
+	s.Unlock()
+}
+
+func (s *State) setRestarting(exitStatus *ExitStatus) {
 	// we should consider the container running when it is restarting because of
 	// all the checks in docker around rm/stop/etc
 	s.Running = true
@@ -182,7 +186,6 @@ func (s *State) SetRestarting(exitStatus *execdriver.ExitStatus) {
 	s.OOMKilled = exitStatus.OOMKilled
 	close(s.waitChan) // fire waiters for stop
 	s.waitChan = make(chan struct{})
-	s.Unlock()
 }
 
 // setError sets the container's error state. This is useful when we want to

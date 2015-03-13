@@ -175,16 +175,16 @@ func TestEventsImagePull(t *testing.T) {
 func TestEventsImageImport(t *testing.T) {
 	defer deleteAllContainers()
 	since := daemonTime(t).Unix()
+	name := "eventsimport"
 
-	runCmd := exec.Command(dockerBinary, "run", "-d", "busybox", "true")
+	runCmd := exec.Command(dockerBinary, "run", "--name", name, "busybox", "true")
 	out, _, err := runCommandWithOutput(runCmd)
 	if err != nil {
 		t.Fatal("failed to create a container", out, err)
 	}
-	cleanedContainerID := stripTrailingCharacters(out)
 
 	out, _, err = runCommandPipelineWithOutput(
-		exec.Command(dockerBinary, "export", cleanedContainerID),
+		exec.Command(dockerBinary, "export", name),
 		exec.Command(dockerBinary, "import", "-"),
 	)
 	if err != nil {
