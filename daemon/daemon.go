@@ -36,6 +36,7 @@ import (
 	"github.com/docker/docker/pkg/common"
 	"github.com/docker/docker/pkg/graphdb"
 	"github.com/docker/docker/pkg/ioutils"
+	"github.com/docker/docker/pkg/lxc"
 	"github.com/docker/docker/pkg/namesgenerator"
 	"github.com/docker/docker/pkg/networkfs/resolvconf"
 	"github.com/docker/docker/pkg/parsers"
@@ -1107,6 +1108,14 @@ func NewDaemonFromDirectory(config *Config, eng *engine.Engine) (*Daemon, error)
 			filepath.Join(runDir, "runtime", "libcontainer"),
 			cgm,
 			libcontainer.InitPath(reexec.Self(), initCommand),
+		)
+		if err != nil {
+			return nil, err
+		}
+		f = factory
+	case "lxc":
+		factory, err := lxc.New(
+			filepath.Join(runDir, "runtime", "lxc"),
 		)
 		if err != nil {
 			return nil, err
