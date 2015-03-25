@@ -12,6 +12,7 @@ type Container struct {
 	mu     sync.Mutex
 	id     string
 	config *configs.Config
+	root   string
 }
 
 func (c *Container) ID() string {
