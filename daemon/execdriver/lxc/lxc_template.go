@@ -13,20 +13,21 @@ import (
 )
 
 const LxcTemplate = `
-{{if .Network.Interface}}
+{{$NETWORK := index .NETWORK 0}}
+{{if $NETWORK.Interface}}
 # network configuration
 lxc.network.type = veth
-lxc.network.link = {{.Network.Interface.Bridge}}
+lxc.network.link = {{$NETWORK.Interface.Bridge}}
 lxc.network.name = eth0
-lxc.network.mtu = {{.Network.Mtu}}
+lxc.network.mtu = {{$NETWORK.Mtu}}
 lxc.network.flags = up
-{{else if .Network.HostNetworking}}
+{{else if $NETWORK.HostNetworking}}
 lxc.network.type = none
 {{else}}
 # network is disabled (-n=false)
 lxc.network.type = empty
 lxc.network.flags = up
-lxc.network.mtu = {{.Network.Mtu}}
+lxc.network.mtu = {{$NETWORK.Mtu}}
 {{end}}
 
 # root filesystem
@@ -43,13 +44,13 @@ lxc.console = none
 # no controlling tty at all
 lxc.tty = 1
 
-{{if .ProcessConfig.Privileged}}
+{{if .Privileged}}
 lxc.cgroup.devices.allow = a
 {{else}}
 # no implicit access to devices
 lxc.cgroup.devices.deny = a
 #Allow the devices passed to us in the AllowedDevices list.
-{{range $allowedDevice := .AllowedDevices}}
+{{range $allowedDevice := .Devices}}
 lxc.cgroup.devices.allow = {{$allowedDevice.CgroupString}}
 {{end}}
 {{end}}
@@ -59,7 +60,7 @@ lxc.cgroup.devices.allow = {{$allowedDevice.CgroupString}}
 lxc.pivotdir = lxc_putold
 
 # NOTICE: These mounts must be applied within the namespace
-{{if .ProcessConfig.Privileged}}
+{{if .Privileged}}
 # WARNING: mounting procfs and/or sysfs read-write is a known attack vector.
 # See e.g. http://blog.zx2c4.com/749 and http://bit.ly/T9CkqJ
 # We mount them read-write here, but later, dockerinit will call the Restrict() function to remount them read-only.
@@ -78,8 +79,8 @@ lxc.aa_profile = {{.AppArmorProfile}}
 	{{end}}
 {{end}}
 
-{{if .ProcessConfig.Tty}}
-lxc.mount.entry = {{.ProcessConfig.Console}} {{escapeFstabSpaces $ROOTFS}}/dev/console none bind,rw 0 0
+{{if .Console}}
+lxc.mount.entry = {{.Console}} {{escapeFstabSpaces $ROOTFS}}/dev/console none bind,rw 0 0
 {{end}}
 
 lxc.mount.entry = devpts {{escapeFstabSpaces $ROOTFS}}/dev/pts devpts {{formatMountLabel "newinstance,ptmxmode=0666,nosuid,noexec" ""}} 0 0
@@ -117,29 +118,29 @@ lxc.{{$value}}
 {{end}}
 {{end}}
 
-{{if .Network.Interface}}
-{{if .Network.Interface.IPAddress}}
-lxc.network.ipv4 = {{.Network.Interface.IPAddress}}/{{.Network.Interface.IPPrefixLen}}
+{{if $NETWORK.Interface}}
+{{if $NETWORK.Interface.IPAddress}}
+lxc.network.ipv4 = {{$NETWORK.Interface.IPAddress}}/{{$NETWORK.Interface.IPPrefixLen}}
 {{end}}
-{{if .Network.Interface.Gateway}}
-lxc.network.ipv4.gateway = {{.Network.Interface.Gateway}}
+{{if $NETWORK.Interface.Gateway}}
+lxc.network.ipv4.gateway = {{$NETWORK.Interface.Gateway}}
 {{end}}
-{{if .Network.Interface.MacAddress}}
-lxc.network.hwaddr = {{.Network.Interface.MacAddress}}
+{{if $NETWORK.Interface.MacAddress}}
+lxc.network.hwaddr = {{$NETWORK.Interface.MacAddress}}
 {{end}}
-{{if .ProcessConfig.Env}}
-lxc.utsname = {{getHostname .ProcessConfig.Env}}
+{{if .Env}}
+lxc.utsname = {{getHostname .Env}}
 {{end}}
 
-{{if .ProcessConfig.Privileged}}
+{{if .Privileged}}
 # No cap values are needed, as lxc is starting in privileged mode
 {{else}}
-	{{ with keepCapabilities .CapAdd .CapDrop }}
+	{{ with .Capabilities }}
 		{{range .}}
 lxc.cap.keep = {{.}}
 		{{end}}
 	{{else}}
-		{{ with dropList .CapDrop }}
+		{{ with dropList .Capabilities }}
 		{{range .}}
 lxc.cap.drop = {{.}}
 		{{end}}
@@ -157,29 +158,8 @@ func escapeFstabSpaces(field string) string {
 	return strings.Replace(field, " ", "\\040", -1)
 }
 
-var basicCaps = []string{
-	"CHOWN",
-	"DAC_OVERRIDE",
-	"FSETID",
-	"FOWNER",
-	"MKNOD",
-	"NET_RAW",
-	"SETGID",
-	"SETUID",
-	"SETFCAP",
-	"SETPCAP",
-	"NET_BIND_SERVICE",
-	"SYS_CHROOT",
-	"KILL",
-	"AUDIT_WRITE",
-}
-
-func keepCapabilities(adds []string, drops []string) ([]string, error) {
-	log.Debugf("adds %s drops %s\n", adds, drops)
-	caps, err := execdriver.TweakCapabilities(basicCaps, adds, drops)
-	if err != nil {
-		return nil, err
-	}
+func keepCapabilities(caps []string) ([]string, error) {
+	log.Debugf("caps %s \n", caps)
 	var newCaps []string
 	for _, cap := range caps {
 		log.Debugf("cap %s\n", cap)
@@ -191,18 +171,18 @@ func keepCapabilities(adds []string, drops []string) ([]string, error) {
 	return newCaps, nil
 }
 
-func dropList(drops []string) ([]string, error) {
-	if utils.StringsContainsNoCase(drops, "all") {
-		var newCaps []string
-		for _, capName := range execdriver.GetAllCapabilities() {
-			cap := execdriver.GetCapability(capName)
-			log.Debugf("drop cap %s\n", cap.Key)
-			numCap := fmt.Sprintf("%d", cap.Value)
-			newCaps = append(newCaps, numCap)
-		}
-		return newCaps, nil
+func dropList(caps []string) ([]string, error) {
+	if len(caps) > 0 && !utils.StringsContainsNoCase(drops, "all"){
+		return []string{}, nil
 	}
-	return []string{}, nil
+	var newCaps []string
+	for _, capName := range execdriver.GetAllCapabilities() {
+		cap := execdriver.GetCapability(capName)
+		log.Debugf("drop cap %s\n", cap.Key)
+		numCap := fmt.Sprintf("%d", cap.Value)
+		newCaps = append(newCaps, numCap)
+	}
+	return newCaps, nil
 }
 
 func isDirectory(source string) string {

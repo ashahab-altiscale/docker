@@ -16,16 +16,16 @@ import (
 	"github.com/docker/libcontainer/configs"
 )
 
-type linuxContainer struct {
-	id            string
-	root          string
-	config        *configs.Config
-	cgroupManager cgroups.Manager
-	initPath      string
-	initArgs      []string
-	initProcess   parentProcess
-	m             sync.Mutex
-}
+	type linuxContainer struct {
+		id            string
+		root          string
+		config        *configs.Config
+		cgroupManager cgroups.Manager
+		initPath      string
+		initArgs      []string
+		initProcess   parentProcess
+		m             sync.Mutex
+	}
 
 // ID returns the container's unique ID
 func (c *linuxContainer) ID() string {
@@ -177,8 +177,8 @@ func (c *linuxContainer) newSetnsProcess(p *Process, cmd *exec.Cmd, parentPipe, 
 		"_LIBCONTAINER_INITTYPE=setns",
 	)
 
-	if p.consolePath != "" {
-		cmd.Env = append(cmd.Env, "_LIBCONTAINER_CONSOLE_PATH="+p.consolePath)
+	if p.ConsolePath != "" {
+		cmd.Env = append(cmd.Env, "_LIBCONTAINER_CONSOLE_PATH="+p.ConsolePath)
 	}
 
 	// TODO: set on container for process management
@@ -198,7 +198,7 @@ func (c *linuxContainer) newInitConfig(process *Process) *initConfig {
 		Env:     process.Env,
 		User:    process.User,
 		Cwd:     process.Cwd,
-		Console: process.consolePath,
+		Console: process.ConsolePath,
 	}
 }
 

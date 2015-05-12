@@ -1114,13 +1114,20 @@ func NewDaemonFromDirectory(config *Config, eng *engine.Engine) (*Daemon, error)
 		}
 		f = factory
 	case "lxc":
+		cgm := lxc.Cgroupfs
+		if systemd.UseSystemd() {
+			cgm = lxc.SystemdCgroups
+		}
 		factory, err := lxc.New(
 			filepath.Join(runDir, "runtime", "lxc"),
+			cgm,
+			lxc.InitPath(reexec.Self()),
 		)
 		if err != nil {
 			return nil, err
 		}
 		f = factory
+
 	default:
 		return nil, fmt.Errorf("Unknown execdriver: %s", config.ExecDriver)
 	}

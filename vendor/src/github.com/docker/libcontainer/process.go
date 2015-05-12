@@ -38,8 +38,8 @@ type Process struct {
 	// Stderr is a pointer to a writer which receives the standard error stream.
 	Stderr io.Writer
 
-	// consolePath is the path to the console allocated to the container.
-	consolePath string
+	// ConsolePath is the path to the console allocated to the container.
+	ConsolePath string
 
 	ops processOperations
 }
@@ -77,6 +77,6 @@ func (p *Process) NewConsole(rootuid int) (Console, error) {
 	if err != nil {
 		return nil, err
 	}
-	p.consolePath = console.Path()
+	p.ConsolePath = console.Path()
 	return console, nil
 }
