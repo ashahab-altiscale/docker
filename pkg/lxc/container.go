@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"path"
 	"path/filepath"
-	"text/template"
 	"strconv"
 	"regexp"
 	"time"
@@ -22,6 +21,7 @@ import (
 	"github.com/docker/docker/pkg/version"
 	"strings"
 	"bytes"
+	"github.com/docker/docker/utils"
 )
 
 // network is an internal struct used to setup container networks.
@@ -32,8 +32,6 @@ type network struct {
 	// the container's namespace.
 	TempVethPeerName string `json:"temp_veth_peer_name"`
 }
-
-var LxcTemplateCompiled *template.Template
 
 // initConfig is used for transferring parameters from Exec() to Init()
 type initConfig struct {
@@ -83,6 +81,7 @@ type Container struct {
 	initProcess   parentProcess
 	root   string
 	sharedRoot bool
+	LxcConf []utils.KeyValuePair
 }
 
 type ipc struct {
@@ -107,8 +106,7 @@ func (c *Container) State() (*libcontainer.State, error) {
 }
 
 func (c *Container) Config() configs.Config {
-	cfg := *c.config
-	return cfg
+	return *c.config
 }
 
 func (c *Container) Processes() ([]int, error) {
@@ -160,6 +158,7 @@ func getNsPid(ns *configs.Namespace) (int,error) {
 	if err != nil {
 		return -1, err
 	}
+	log.Debugf("network namespace path %s", ns.Path)
 	res := re.FindAllStringSubmatch(ns.Path, -1)
 	return strconv.Atoi(res[1][0])
 }
@@ -196,6 +195,7 @@ func (c *Container) ipc() (*ipc, error) {
 func (c *Container) Start(process *libcontainer.Process) error {
 	c.m.Lock()
 	defer c.m.Unlock()
+	log.Debugf("Container root %s", c.root)
 	status, err := c.currentStatus()
 	if err != nil {
 		return err
@@ -231,11 +231,12 @@ func (c *Container) Start(process *libcontainer.Process) error {
 	}
 
 	networkNs, err := c.getNamespace(configs.NEWNET)
-	nspid, err := getNsPid(networkNs)
-	if err != nil {
-		return err
-	}
-	if networkNs != nil{
+
+	if networkNs != nil && networkNs.Path != ""{
+		nspid, err := getNsPid(networkNs)
+		if err != nil {
+			return err
+		}
 		params = append(params,
 			"--share-net", strconv.Itoa(nspid),
 		)
@@ -319,7 +320,6 @@ func (c *Container) Start(process *libcontainer.Process) error {
 	}
 	process.Args = append([]string{aname, name}, arg...)
 	parent, err := c.newParentProcess(process, doInit)
-//	lxc_command := exec.Command(aname, append([]string{aname, name}, arg...)...)
 
 	if err := createDeviceNodes(c.config.Rootfs, c.config.Devices); err != nil {
 		return err
@@ -484,7 +484,7 @@ func getExitCode(cmd exec.Cmd) int {
 
 
 func (c *Container) containerDir() string {
-	return path.Join(c.root, "containers", c.ID())
+	return c.root
 }
 
 // wait for the process to start and return the pid for the process
@@ -571,26 +571,33 @@ func (c *Container) newParentProcess(p *libcontainer.Process, doInit bool) (pare
 }
 
 func (c *Container) generateLXCConfig(i *initConfig) (string, error) {
-	root := path.Join(c.containerDir(), "config.lxc")
+	root := path.Join(c.root, "config.lxc")
 
 	fo, err := os.Create(root)
 	if err != nil {
 		return "", err
 	}
 	defer fo.Close()
+	lxcConf := make([]string, len(c.LxcConf))
+	for ind, conf := range c.LxcConf  {
+		lxcStr := fmt.Sprintf("%s = %s", conf.Key, conf.Value)
+		lxcConf[ind] = lxcStr
+	}
 	if err := LxcTemplateCompiled.Execute(fo, struct {
 			*configs.Config
 			AppArmor bool
 			Privileged bool
 			Env []string
 			Console string
+		    LxcConf []string
 
 	}{
-		Config:  c.config,
+		Config:  i.Config,
 		AppArmor: (c.config.AppArmorProfile == "unconfined"),
 		Privileged: c.config.Cgroups.AllowAllDevices,
 		Env: i.Env,
 		Console: i.Console,
+		LxcConf: lxcConf,
 	}); err != nil {
 		return "", err
 	}

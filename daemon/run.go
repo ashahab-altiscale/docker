@@ -11,6 +11,7 @@ import (
 	"github.com/docker/libcontainer"
 	"github.com/docker/libcontainer/configs"
 	"github.com/docker/libcontainer/utils"
+	"github.com/docker/docker/pkg/lxc"
 )
 
 // ExitStatus provides exit reasons for a container.
@@ -86,7 +87,9 @@ func (c *Container) ctRun() error {
 		return err
 	}
 	c.ct = cont
-
+	lxcCt, ok := c.ct.(*lxc.Container); if ok {
+		lxcCt.LxcConf = c.hostConfig.LxcConf
+	}
 	return cont.Start(c.ctInitProcess)
 }
 

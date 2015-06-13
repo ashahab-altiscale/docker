@@ -15,6 +15,7 @@ import (
 	"github.com/docker/libcontainer/cgroups"
 	"github.com/docker/libcontainer/cgroups/fs"
 	"github.com/docker/libcontainer/cgroups/systemd"
+	log "github.com/Sirupsen/logrus"
 )
 
 const (
@@ -123,6 +124,7 @@ func New(root string, options ...func(*Factory) error) (libcontainer.Factory, er
 	if err := linkLxcStart(root); err != nil {
 		return nil, err
 	}
+	log.Debugf("Factory root %s", root)
 	return f, nil
 }
 

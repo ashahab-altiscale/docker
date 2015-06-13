@@ -16,7 +16,7 @@ import (
 )
 
 // Args provided to the init function for a driver
-type InitArgs struct {
+type Init_Args struct {
 	User       string
 	Gateway    string
 	Ip         string
@@ -53,7 +53,7 @@ func initializer() {
 	}
 }
 
-func setupNamespace(args *InitArgs) error {
+func setupNamespace(args *Init_Args) error {
 	if err := setupEnv(args); err != nil {
 		return err
 	}
@@ -75,7 +75,7 @@ func setupNamespace(args *InitArgs) error {
 	return nil
 }
 
-func getArgs() *InitArgs {
+func getArgs() *Init_Args {
 	var (
 		// Get cmdline arguments
 		user       = flag.String("u", "", "username or uid")
@@ -90,7 +90,7 @@ func getArgs() *InitArgs {
 
 	flag.Parse()
 
-	return &InitArgs{
+	return &Init_Args{
 		User:       *user,
 		Gateway:    *gateway,
 		Ip:         *ip,
@@ -104,7 +104,7 @@ func getArgs() *InitArgs {
 }
 
 // Clear environment pollution introduced by lxc-start
-func setupEnv(args *InitArgs) error {
+func setupEnv(args *Init_Args) error {
 	// Get env
 	var env []string
 	content, err := ioutil.ReadFile(".dockerenv")
@@ -132,7 +132,7 @@ func setupEnv(args *InitArgs) error {
 }
 
 // Setup working directory
-func setupWorkingDirectory(args *InitArgs) error {
+func setupWorkingDirectory(args *Init_Args) error {
 	if args.WorkDir == "" {
 		return nil
 	}
@@ -142,7 +142,7 @@ func setupWorkingDirectory(args *InitArgs) error {
 	return nil
 }
 
-func getEnv(args *InitArgs, key string) string {
+func getEnv(args *Init_Args, key string) string {
 	for _, kv := range args.Env {
 		parts := strings.SplitN(kv, "=", 2)
 		if parts[0] == key && len(parts) == 2 {

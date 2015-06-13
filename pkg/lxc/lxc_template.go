@@ -13,21 +13,22 @@ import (
 )
 
 const LxcTemplate = `
-{{$NETWORK := index .NETWORK 0}}
-{{if $NETWORK.Interface}}
+{{$NETWORK := index .Networks 0}}
+{{$TYPE := $NETWORK.Type}}
+{{if eq $TYPE "veth"}}
 # network configuration
-lxc.network.type = veth
-lxc.network.link = {{$NETWORK.Interface.Bridge}}
-lxc.network.name = eth0
-lxc.network.mtu = {{$NETWORK.Mtu}}
-lxc.network.flags = up
-{{else if $NETWORK.HostNetworking}}
-lxc.network.type = none
+ lxc.network.type = veth
+ lxc.network.link = {{$NETWORK.Bridge}}
+ lxc.network.name = {{$NETWORK.Name}}
+ lxc.network.mtu = {{$NETWORK.Mtu}}
+ lxc.network.flags = up
+{{else if eq $TYPE "loopback"}}
+ lxc.network.type = none
 {{else}}
 # network is disabled (-n=false)
-lxc.network.type = empty
-lxc.network.flags = up
-lxc.network.mtu = {{$NETWORK.Mtu}}
+  lxc.network.type = empty
+  lxc.network.flags = up
+  lxc.network.mtu = {{$NETWORK.Mtu}}
 {{end}}
 
 # root filesystem
@@ -37,22 +38,19 @@ lxc.rootfs = {{$ROOTFS}}
 # use a dedicated pts for the container (and limit the number of pseudo terminal
 # available)
 lxc.pts = 1024
-
 # disable the main console
 lxc.console = none
-
 # no controlling tty at all
 lxc.tty = 1
-
 {{if .Privileged}}
-lxc.cgroup.devices.allow = a
+	lxc.cgroup.devices.allow = a
 {{else}}
-# no implicit access to devices
-lxc.cgroup.devices.deny = a
-#Allow the devices passed to us in the AllowedDevices list.
-{{range $allowedDevice := .Devices}}
-lxc.cgroup.devices.allow = {{$allowedDevice.CgroupString}}
-{{end}}
+	# no implicit access to devices
+	lxc.cgroup.devices.deny = a
+	#Allow the devices passed to us in the AllowedDevices list.
+	{{range $allowedDevice := .Cgroups.AllowedDevices}}
+		lxc.cgroup.devices.allow = {{$allowedDevice.CgroupString}}
+	{{end}}
 {{end}}
 
 # standard mount point
@@ -89,47 +87,46 @@ lxc.mount.entry = shm {{escapeFstabSpaces $ROOTFS}}/dev/shm tmpfs {{formatMountL
 {{range $value := .Mounts}}
 {{$createVal := isDirectory $value.Source}}
 {{if $value.Writable}}
-lxc.mount.entry = {{$value.Source}} {{escapeFstabSpaces $ROOTFS}}/{{escapeFstabSpaces $value.Destination}} none rbind,rw,create={{$createVal}} 0 0
+  lxc.mount.entry = {{$value.Source}} {{escapeFstabSpaces $ROOTFS}}/{{escapeFstabSpaces $value.Destination}} none rbind,rw,create={{$createVal}} 0 0
 {{else}}
-lxc.mount.entry = {{$value.Source}} {{escapeFstabSpaces $ROOTFS}}/{{escapeFstabSpaces $value.Destination}} none rbind,ro,create={{$createVal}} 0 0
+  lxc.mount.entry = {{$value.Source}} {{escapeFstabSpaces $ROOTFS}}/{{escapeFstabSpaces $value.Destination}} none rbind,ro,create={{$createVal}} 0 0
 {{end}}
 {{end}}
 
 # limits
-{{if .Resources}}
-{{if .Resources.Memory}}
-lxc.cgroup.memory.limit_in_bytes = {{.Resources.Memory}}
-lxc.cgroup.memory.soft_limit_in_bytes = {{.Resources.Memory}}
-{{with $memSwap := getMemorySwap .Resources}}
-lxc.cgroup.memory.memsw.limit_in_bytes = {{$memSwap}}
+
+{{if .Cgroups.Memory}}
+	lxc.cgroup.memory.limit_in_bytes = {{.Cgroups.Memory}}
+	lxc.cgroup.memory.soft_limit_in_bytes = {{.Cgroups.Memory}}
+	{{with $memSwap := .Cgroups.MemorySwap}}
+		lxc.cgroup.memory.memsw.limit_in_bytes = {{$memSwap}}
+	{{end}}
 {{end}}
+{{if .Cgroups.CpuShares}}
+	lxc.cgroup.cpu.shares = {{.Cgroups.CpuShares}}
 {{end}}
-{{if .Resources.CpuShares}}
-lxc.cgroup.cpu.shares = {{.Resources.CpuShares}}
-{{end}}
-{{if .Resources.CpusetCpus}}
-lxc.cgroup.cpuset.cpus = {{.Resources.CpusetCpus}}
-{{end}}
+{{if .Cgroups.CpusetCpus}}
+	lxc.cgroup.cpuset.cpus = {{.Cgroups.CpusetCpus}}
 {{end}}
 
-{{if .LxcConfig}}
-{{range $value := .LxcConfig}}
-lxc.{{$value}}
-{{end}}
+{{if .LxcConf}}
+	{{range $value := .LxcConf}}
+		{{$value}}
+	{{end}}
 {{end}}
 
-{{if $NETWORK.Interface}}
-{{if $NETWORK.Interface.IPAddress}}
-lxc.network.ipv4 = {{$NETWORK.Interface.IPAddress}}/{{$NETWORK.Interface.IPPrefixLen}}
+{{if $NETWORK.Address}}
+	lxc.network.ipv4 = {{$NETWORK.Address}}
 {{end}}
-{{if $NETWORK.Interface.Gateway}}
-lxc.network.ipv4.gateway = {{$NETWORK.Interface.Gateway}}
+{{if $NETWORK.Gateway}}
+	lxc.network.ipv4.gateway = {{$NETWORK.Gateway}}
 {{end}}
-{{if $NETWORK.Interface.MacAddress}}
-lxc.network.hwaddr = {{$NETWORK.Interface.MacAddress}}
+{{if $NETWORK.MacAddress}}
+	lxc.network.hwaddr = {{$NETWORK.MacAddress}}
 {{end}}
+
 {{if .Env}}
-lxc.utsname = {{getHostname .Env}}
+	lxc.utsname = {{getHostname .Env}}
 {{end}}
 
 {{if .Privileged}}
@@ -137,17 +134,17 @@ lxc.utsname = {{getHostname .Env}}
 {{else}}
 	{{ with .Capabilities }}
 		{{range .}}
-lxc.cap.keep = {{.}}
+			lxc.cap.keep = {{.}}
 		{{end}}
 	{{else}}
 		{{ with dropList .Capabilities }}
-		{{range .}}
-lxc.cap.drop = {{.}}
-		{{end}}
+			{{range .}}
+				lxc.cap.drop = {{.}}
+			{{end}}
 		{{end}}
 	{{end}}
 {{end}}
-{{end}}
+
 `
 
 var LxcTemplateCompiled *template.Template
@@ -172,7 +169,7 @@ func keepCapabilities(caps []string) ([]string, error) {
 }
 
 func dropList(caps []string) ([]string, error) {
-	if len(caps) > 0 && !utils.StringsContainsNoCase(drops, "all"){
+	if len(caps) > 0 && !utils.StringsContainsNoCase(caps, "all"){
 		return []string{}, nil
 	}
 	var newCaps []string
