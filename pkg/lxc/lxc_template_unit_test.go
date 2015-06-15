@@ -16,6 +16,7 @@ import (
 	"github.com/docker/libcontainer/configs"
 
 	"github.com/docker/docker/utils"
+	"github.com/docker/docker/vendor/src/github.com/Sirupsen/logrus"
 )
 
 func TestLXCConfig(t *testing.T) {
@@ -171,6 +172,7 @@ func grepFileWithReverse(t *testing.T, path string, pattern string, inverseGrep 
 	err = nil
 	for err == nil {
 		line, err = r.ReadString('\n')
+		logrus.Infof("line %s == %s? %s\n", strings.TrimSpace(line), pattern, strings.Contains(strings.TrimSpace(line), pattern))
 
 		if strings.Contains(strings.TrimSpace(line), pattern) == true {
 			if inverseGrep {
@@ -259,7 +261,7 @@ func TestCustomLxcConfigMounts(t *testing.T) {
 			Source:      tempDir,
 			Destination: tempDir,
 			Device:    "bind",
-			Flags:     syscall.MS_BIND | syscall.MS_REC,
+			Flags:     syscall.MS_BIND | syscall.MS_REC | syscall.MS_RDONLY,
 		},
 		{
 			Source:      tempFile.Name(),
@@ -269,7 +271,7 @@ func TestCustomLxcConfigMounts(t *testing.T) {
 		},
 	}
 	config := &configs.Config{
-		Rootfs: "/tmp",
+		Rootfs: "",
 		Networks: networks,
 		Cgroups: &configs.Cgroup{
 			Name:            "test",

@@ -10,6 +10,7 @@ import (
 	"github.com/docker/docker/daemon/execdriver"
 	"github.com/docker/docker/utils"
 	"github.com/docker/libcontainer/label"
+	"syscall"
 )
 
 const LxcTemplate = `
@@ -86,7 +87,7 @@ lxc.mount.entry = shm {{escapeFstabSpaces $ROOTFS}}/dev/shm tmpfs {{formatMountL
 
 {{range $value := .Mounts}}
 {{$createVal := isDirectory $value.Source}}
-{{if $value.Writable}}
+{{if writableMount $value.Flags}}
   lxc.mount.entry = {{$value.Source}} {{escapeFstabSpaces $ROOTFS}}/{{escapeFstabSpaces $value.Destination}} none rbind,rw,create={{$createVal}} 0 0
 {{else}}
   lxc.mount.entry = {{$value.Source}} {{escapeFstabSpaces $ROOTFS}}/{{escapeFstabSpaces $value.Destination}} none rbind,ro,create={{$createVal}} 0 0
@@ -227,6 +228,15 @@ func getHostname(env []string) string {
 	return ""
 }
 
+func writableMount(flags int) bool {
+    return !hasBit(flags, syscall.MS_RDONLY)
+}
+
+func hasBit(n int, pos int) bool {
+	val := n & pos
+	return (val > 0)
+}
+
 func init() {
 	var err error
 	funcMap := template.FuncMap{
@@ -237,6 +247,7 @@ func init() {
 		"keepCapabilities":  keepCapabilities,
 		"dropList":          dropList,
 		"getHostname":       getHostname,
+		"writableMount":     writableMount,
 	}
 	LxcTemplateCompiled, err = template.New("lxc").Funcs(funcMap).Parse(LxcTemplate)
 	if err != nil {
