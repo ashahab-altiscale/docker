@@ -17,6 +17,8 @@ import (
 
 	"github.com/docker/docker/utils"
 	"github.com/docker/docker/vendor/src/github.com/Sirupsen/logrus"
+	"github.com/docker/docker/vendor/src/github.com/syndtr/gocapability/capability"
+	"github.com/docker/docker/daemon/execdriver"
 )
 
 func TestLXCConfig(t *testing.T) {
@@ -323,129 +325,106 @@ func TestCustomLxcConfigMounts(t *testing.T) {
 	grepFile(t, p, fmt.Sprintf("lxc.mount.entry = %s %s none rbind,ro,create=%s 0 0", tempDir, "/"+tempDir, "dir"))
 	grepFile(t, p, fmt.Sprintf("lxc.mount.entry = %s %s none rbind,rw,create=%s 0 0", tempFile.Name(), "/"+tempFile.Name(), "file"))
 }
-//
-//func TestCustomLxcConfigMisc(t *testing.T) {
-//	root, err := ioutil.TempDir("", "TestCustomLxcConfig")
-//	if err != nil {
-//		t.Fatal(err)
-//	}
-//	defer os.RemoveAll(root)
-//	os.MkdirAll(path.Join(root, "containers", "1"), 0777)
-//	driver, err := NewDriver(root, root, "", true)
-//
-//	if err != nil {
-//		t.Fatal(err)
-//	}
-//	processConfig := execdriver.ProcessConfig{
-//		Privileged: false,
-//	}
-//
-//	processConfig.Env = []string{"HOSTNAME=testhost"}
-//	command := &execdriver.Command{
-//		ID: "1",
-//		LxcConfig: []string{
-//			"lxc.cgroup.cpuset.cpus = 0,1",
-//		},
-//		Network: &execdriver.Network{
-//			Mtu: 1500,
-//			Interface: &execdriver.NetworkInterface{
-//				Gateway:     "10.10.10.1",
-//				IPAddress:   "10.10.10.10",
-//				IPPrefixLen: 24,
-//				Bridge:      "docker0",
-//			},
-//		},
-//		ProcessConfig:   processConfig,
-//		CapAdd:          []string{"net_admin", "syslog"},
-//		CapDrop:         []string{"kill", "mknod"},
-//		AppArmorProfile: "lxc-container-default-with-nesting",
-//	}
-//
-//	p, err := driver.generateLXCConfig(command)
-//	if err != nil {
-//		t.Fatal(err)
-//	}
-//	// network
-//	grepFile(t, p, "lxc.network.type = veth")
-//	grepFile(t, p, "lxc.network.link = docker0")
-//	grepFile(t, p, "lxc.network.name = eth0")
-//	grepFile(t, p, "lxc.network.ipv4 = 10.10.10.10/24")
-//	grepFile(t, p, "lxc.network.ipv4.gateway = 10.10.10.1")
-//	grepFile(t, p, "lxc.network.flags = up")
-//	grepFile(t, p, "lxc.aa_profile = lxc-container-default-with-nesting")
-//	// hostname
-//	grepFile(t, p, "lxc.utsname = testhost")
-//	grepFile(t, p, "lxc.cgroup.cpuset.cpus = 0,1")
-//	for _, cap := range basicCaps {
-//		realCap := execdriver.GetCapability(cap)
-//		numCap := fmt.Sprintf("%d", realCap.Value)
-//		if cap != "MKNOD" && cap != "KILL" {
-//			grepFile(t, p, fmt.Sprintf("lxc.cap.keep = %s", numCap))
-//		}
-//	}
-//
-//	grepFileWithReverse(t, p, fmt.Sprintf("lxc.cap.keep = %d", capability.CAP_KILL), true)
-//	grepFileWithReverse(t, p, fmt.Sprintf("lxc.cap.keep = %d", capability.CAP_MKNOD), true)
-//}
-//
-//func TestCustomLxcConfigMiscOverride(t *testing.T) {
-//	root, err := ioutil.TempDir("", "TestCustomLxcConfig")
-//	if err != nil {
-//		t.Fatal(err)
-//	}
-//	defer os.RemoveAll(root)
-//	os.MkdirAll(path.Join(root, "containers", "1"), 0777)
-//	driver, err := NewDriver(root, root, "", false)
-//	if err != nil {
-//		t.Fatal(err)
-//	}
-//	processConfig := execdriver.ProcessConfig{
-//		Privileged: false,
-//	}
-//
-//	processConfig.Env = []string{"HOSTNAME=testhost"}
-//	command := &execdriver.Command{
-//		ID: "1",
-//		LxcConfig: []string{
-//			"lxc.cgroup.cpuset.cpus = 0,1",
-//			"lxc.network.ipv4 = 172.0.0.1",
-//		},
-//		Network: &execdriver.Network{
-//			Mtu: 1500,
-//			Interface: &execdriver.NetworkInterface{
-//				Gateway:     "10.10.10.1",
-//				IPAddress:   "10.10.10.10",
-//				IPPrefixLen: 24,
-//				Bridge:      "docker0",
-//			},
-//		},
-//		ProcessConfig: processConfig,
-//		CapAdd:        []string{"NET_ADMIN", "SYSLOG"},
-//		CapDrop:       []string{"KILL", "MKNOD"},
-//	}
-//
-//	p, err := driver.generateLXCConfig(command)
-//	if err != nil {
-//		t.Fatal(err)
-//	}
-//	// network
-//	grepFile(t, p, "lxc.network.type = veth")
-//	grepFile(t, p, "lxc.network.link = docker0")
-//	grepFile(t, p, "lxc.network.name = eth0")
-//	grepFile(t, p, "lxc.network.ipv4 = 172.0.0.1")
-//	grepFile(t, p, "lxc.network.ipv4.gateway = 10.10.10.1")
-//	grepFile(t, p, "lxc.network.flags = up")
-//
-//	// hostname
-//	grepFile(t, p, "lxc.utsname = testhost")
-//	grepFile(t, p, "lxc.cgroup.cpuset.cpus = 0,1")
-//	for _, cap := range basicCaps {
-//		realCap := execdriver.GetCapability(cap)
-//		numCap := fmt.Sprintf("%d", realCap.Value)
-//		if cap != "MKNOD" && cap != "KILL" {
-//			grepFile(t, p, fmt.Sprintf("lxc.cap.keep = %s", numCap))
-//		}
-//	}
-//	grepFileWithReverse(t, p, fmt.Sprintf("lxc.cap.keep = %d", capability.CAP_KILL), true)
-//	grepFileWithReverse(t, p, fmt.Sprintf("lxc.cap.keep = %d", capability.CAP_MKNOD), true)
-//}
+
+func TestCustomLxcConfigMisc(t *testing.T) {
+	basicCaps := []string{
+"CHOWN",
+"DAC_OVERRIDE",
+"FSETID",
+"FOWNER",
+"MKNOD",
+"NET_RAW",
+"SETGID",
+"SETUID",
+"SETFCAP",
+"SETPCAP",
+"NET_BIND_SERVICE",
+"SYS_CHROOT",
+"KILL",
+"AUDIT_WRITE",
+}
+	root, err := ioutil.TempDir("", "TestCustomLxcConfig")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	rootPath := path.Join(root, "containers", "1")
+	os.MkdirAll(rootPath, 0777)
+
+	networks :=  make([]*configs.Network, 1)
+	networks[0] = &configs.Network{
+		Type: "veth",
+		Bridge: "test_if_br",
+		Name: "test_if_name",
+		Mtu: 1500,
+		Address: "10.10.10.10/24",
+		Gateway: "10.10.10.1",
+	}
+	config := &configs.Config{
+		Rootfs: "/",
+		Networks: networks,
+		Cgroups: &configs.Cgroup{
+			Name:            "test",
+			Parent:          "integration",
+			AllowAllDevices: false,
+			AllowedDevices:  configs.DefaultAllowedDevices,
+		},
+		Capabilities:  []string{"net_admin", "syslog"},
+		AppArmorProfile: "lxc-container-default-with-nesting",
+	}
+
+	lxcConf := make([]utils.KeyValuePair, 2)
+	lxcConf[0] = utils.KeyValuePair{
+		Key: "lxc.utsname",
+		Value: "docker",
+	}
+	lxcConf[1] = utils.KeyValuePair{
+		Key: "lxc.cgroup.cpuset.cpus",
+		Value: "0,1",
+	}
+	driver := &Container{
+		id:     "test_container",
+		root:   rootPath,
+		config: config,
+		initPath:      "fakeInit",
+		initArgs:      nil,
+		cgroupManager: nil,
+		sharedRoot:    rootIsShared(),
+		LxcConf:  lxcConf,
+	}
+
+	initConfig := &initConfig{
+		Config:  config,
+		Args:    nil,
+		Env:     []string{"HOSTNAME=testhost"},
+		User:    "test_user",
+		Cwd:     "/root",
+		Console: "/console",
+	}
+	p, err := driver.generateLXCConfig(initConfig)
+	// network
+	grepFile(t, p, "lxc.network.type = veth")
+	grepFile(t, p, "lxc.network.link = test_if_br")
+	grepFile(t, p, "lxc.network.name = test_if_name")
+	grepFile(t, p, "lxc.network.ipv4 = 10.10.10.10/24")
+	grepFile(t, p, "lxc.network.ipv4.gateway = 10.10.10.1")
+	grepFile(t, p, "lxc.network.flags = up")
+	grepFile(t, p, "lxc.aa_profile = lxc-container-default-with-nesting")
+
+	// hostname
+	grepFile(t, p, "lxc.utsname = testhost")
+	grepFile(t, p, "lxc.cgroup.cpuset.cpus = 0,1")
+
+	for _, cap := range basicCaps {
+		realCap := execdriver.GetCapability(cap)
+		numCap := fmt.Sprintf("%d", realCap.Value)
+		logrus.Infof("cap %s Numcap %d\n", cap, numCap)
+		if cap != "NET_ADMIN" && cap != "SYSLOG" {
+			grepFileWithReverse(t, p, fmt.Sprintf("lxc.cap.keep = %d", numCap), true)
+		}
+	}
+
+	grepFileWithReverse(t, p, fmt.Sprintf("lxc.cap.keep = %d", capability.CAP_NET_ADMIN), true)
+	grepFileWithReverse(t, p, fmt.Sprintf("lxc.cap.keep = %d", capability.CAP_SYSLOG), true)
+}
+
